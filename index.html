@@ -1,0 +1,241 @@
+<!--
+Project Title   : Code Meter
+Version         : 1.0.0
+Author          : Jalal Khan
+Company         : Eastern Solution
+Developed By    : Eastern Solution Team
+Project Type    : Web Application
+Technology      : JavaScript, HTML5, CSS3, PHP 8.3 or higher
+License         : Proprietary / Open Source
+Start Date      : Oct-21-2026
+Last Updated    : Oct-21-2026
+Collation       : utf8mb4_unicode_ci
+Status          : Active Development
+Client          : Internal / Customer / Individual / student
+Contact Email   : jalalkhan121@gmail.com
+
+Copyright       : © 2026 Eastern Solution. All Rights Reserved.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CodeMeter — count lines of code</title>
+<style>
+:root{
+  --bg1:#0a0820; --bg2:#1c1040; --bg3:#4a1a72;
+  --panel:#0d1020; --head:#1c2a3a; --row:#101827; --text:#e9e9f2; --dim:#8a8fb0;
+  --accent:#ff9d2e; --edge:#4655e6; --btn:#131a48; --yellow:#ffc857; --line:#1f2a44;
+}
+@media (prefers-color-scheme: light){ :root{ --bg1:#0a0820; } }
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  font:14px/1.35 "Cascadia Mono","JetBrains Mono",Consolas,"DejaVu Sans Mono",monospace;
+  color:var(--text);
+  background:linear-gradient(180deg,var(--bg1) 0%,var(--bg2) 55%,var(--bg3) 100%) fixed;
+  display:flex;justify-content:center;padding:18px;
+}
+body::after{ /* synthwave floor grid */
+  content:"";position:fixed;left:0;right:0;bottom:0;height:34vh;pointer-events:none;
+  background:
+    repeating-linear-gradient(90deg,rgba(255,60,200,.35) 0 1px,transparent 1px 70px),
+    repeating-linear-gradient(0deg,rgba(255,60,200,.35) 0 1px,transparent 1px 36px);
+  transform:perspective(300px) rotateX(55deg);transform-origin:bottom;opacity:.5;
+}
+.term{
+  position:relative;z-index:1;width:min(1000px,100%);display:flex;flex-direction:column;gap:10px;
+  background:rgba(10,12,28,.88);border-top:3px dotted #e9e9f2;padding:10px 14px 14px;
+  max-height:calc(100vh - 36px);
+}
+.status{color:var(--text);white-space:pre-wrap}
+.status b{font-weight:400;color:var(--yellow)}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+button{
+  font:inherit;color:var(--text);background:var(--btn);border:2px solid var(--edge);
+  padding:7px 14px;cursor:pointer;border-radius:3px;
+}
+button:hover{background:#1d2766}
+button:focus-visible,th:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button[aria-pressed="true"]{border-color:#fff;background:#222d8a}
+.table{
+  flex:1;min-height:200px;overflow:auto;background:var(--row);border:1px solid var(--line);position:relative;
+}
+.table.drag{outline:2px dashed var(--accent);outline-offset:-6px}
+table{border-collapse:collapse;width:100%}
+th{
+  position:sticky;top:0;background:var(--head);text-align:left;font-weight:400;padding:3px 10px;
+  cursor:pointer;white-space:nowrap;user-select:none;z-index:2;
+}
+th .arr{color:var(--accent)}
+td{padding:1px 10px;white-space:nowrap}
+td.n,th.n{text-align:left}
+tbody tr:hover{background:#18233a}
+.ext{color:var(--accent)}
+tfoot td{position:sticky;bottom:0;background:var(--head);padding:3px 10px}
+.keys{background:var(--head);padding:3px 10px;color:var(--text)}
+.keys span{color:var(--accent)} .keys i{color:var(--dim);font-style:normal}
+.empty{padding:60px 20px;text-align:center;color:var(--dim)}
+.empty strong{color:var(--accent);font-weight:400}
+.hide{display:none}
+</style>
+</head>
+<body>
+<main class="term">
+  <div class="status" id="status" aria-live="polite"></div>
+
+  <div class="row" id="views" role="group" aria-label="View">
+    <button data-view="files" aria-pressed="true">Show files</button>
+    <button data-view="lang" aria-pressed="false">Group by language</button>
+    <button data-view="dir" aria-pressed="false">Group by dir</button>
+  </div>
+
+  <div class="table" id="drop">
+    <table id="tbl"><thead></thead><tbody></tbody><tfoot></tfoot></table>
+    <div class="empty" id="empty">Drop a folder or files here,<br>or use <strong>Open folder</strong> below.</div>
+  </div>
+
+  <div class="keys"><span>Tab</span> Cycle focus <i>|</i> <span>1-6</span> Sort columns <i>|</i> <span>Click</span> Headers to sort <i>|</i> <span>Ctrl+q</span> Clear</div>
+
+  <div class="row">
+    <button id="openDir">Open folder</button>
+    <button id="openFiles">Open files</button>
+    <button id="clear">Clear</button>
+  </div>
+
+  <input type="file" id="dirIn" webkitdirectory multiple class="hide">
+  <input type="file" id="fileIn" multiple class="hide">
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const IGNORE = new Set(['node_modules','.git','vendor','dist','build','__pycache__','.venv','.idea','.next','target']);
+const MAX_FILE = 1_000_000, BATCH_BYTES = 1_500_000, BATCH_COUNT = 200;
+const COLS = {
+  files:[['path','path'],['language','language'],['blank','blank'],['comment','comment'],['code','code'],['total','total']],
+  lang: [['name','language'],['files','files'],['blank','blank'],['comment','comment'],['code','code'],['total','total']],
+  dir:  [['name','directory'],['files','files'],['blank','blank'],['comment','comment'],['code','code'],['total','total']],
+};
+let rows = [], view = 'files', sort = {key:'total', dir:-1}, elapsed = 0, skipped = 0, busy = false;
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = n => n.toLocaleString('en-US');
+
+function grouped(by){
+  const m = new Map();
+  for (const r of rows){
+    const k = by === 'lang' ? r.language : (r.path.includes('/') ? r.path.slice(0, r.path.lastIndexOf('/')) : '.');
+    const g = m.get(k) || {name:k, files:0, blank:0, comment:0, code:0, total:0};
+    g.files++; for (const f of ['blank','comment','code','total']) g[f] += r[f];
+    m.set(k, g);
+  }
+  return [...m.values()];
+}
+function current(){
+  const data = view === 'files' ? rows.slice() : grouped(view);
+  const k = sort.key;
+  data.sort((a,b) => (typeof a[k] === 'number' ? a[k]-b[k] : String(a[k]).localeCompare(b[k])) * sort.dir);
+  return data;
+}
+function render(){
+  const cols = COLS[view], data = current();
+  const t = {files:rows.length, blank:0, comment:0, code:0, total:0};
+  for (const r of rows){ t.blank+=r.blank; t.comment+=r.comment; t.code+=r.code; t.total+=r.total; }
+
+  $('#status').innerHTML =
+    `Running on CodeMeter v1.00\nElapsed time: ${elapsed.toFixed(2)} sec | Files counted: ${fmt(t.files)} | Lines counted: ${fmt(t.total)}` +
+    (skipped ? ` | Skipped: ${fmt(skipped)}` : '') + (busy ? '\nCounting…' : '\nCounts via PHP · interface in JavaScript');
+
+  $('#tbl thead').innerHTML = '<tr>' + cols.map(([k,label],i) =>
+    `<th tabindex="0" data-k="${k}" title="Sort by ${label} (key ${i+1})">${label}${sort.key===k?` <span class="arr">${sort.dir>0?'↑':'↓'}</span>`:' <span class="arr">-</span>'}</th>`).join('') + '</tr>';
+
+  $('#tbl tbody').innerHTML = data.map(r => {
+    const first = view === 'files'
+      ? (() => { const p = r.path, d = p.lastIndexOf('.'), s = p.lastIndexOf('/'); return d > s + 0 && d > 0 ? esc(p.slice(0,d)) + `<span class="ext">${esc(p.slice(d))}</span>` : esc(p); })()
+      : esc(r.name);
+    const second = view === 'files' ? esc(r.language) : fmt(r.files);
+    return `<tr><td>${first}</td><td>${second}</td><td>${fmt(r.blank)}</td><td>${fmt(r.comment)}</td><td>${fmt(r.code)}</td><td>${fmt(r.total)}</td></tr>`;
+  }).join('');
+
+  $('#tbl tfoot').innerHTML = rows.length
+    ? `<tr><td>SUM:</td><td>${fmt(t.files)} files</td><td>${fmt(t.blank)}</td><td>${fmt(t.comment)}</td><td>${fmt(t.code)}</td><td>${fmt(t.total)}</td></tr>` : '';
+  $('#empty').classList.toggle('hide', rows.length > 0);
+  document.querySelectorAll('#views button').forEach(b => b.setAttribute('aria-pressed', b.dataset.view === view));
+}
+
+function setSort(k){ sort = {key:k, dir: sort.key === k ? -sort.dir : (typeof (rows[0]||{})[k] === 'number' || ['files','blank','comment','code','total'].includes(k) ? -1 : 1)}; render(); }
+
+async function analyze(list){
+  list = list.filter(({path, file}) => !path.split('/').some(p => IGNORE.has(p)) && file.size <= MAX_FILE);
+  if (!list.length) return;
+  busy = true; const t0 = performance.now(); render();
+  let batch = [], bytes = 0;
+  const flush = async () => {
+    if (!batch.length) return;
+    try {
+      const res = await fetch('count.php', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({files: batch})});
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      rows.push(...data.files); skipped += data.skipped;
+    } catch (e) {
+      $('#status').textContent = 'Error: ' + e.message + '\nServe this folder with PHP: php -S localhost:8000';
+      throw e;
+    }
+    batch = []; bytes = 0; elapsed += (performance.now() - t0) / 1000 - elapsed; render();
+  };
+  try {
+    for (const {path, file} of list){
+      batch.push({path, content: await file.text()}); bytes += file.size;
+      if (bytes > BATCH_BYTES || batch.length >= BATCH_COUNT) await flush();
+    }
+    await flush();
+  } catch(e){ busy = false; return; }
+  busy = false; elapsed = (performance.now() - t0) / 1000 + 0; render();
+}
+
+const fromInput = files => [...files].map(f => ({file:f, path: f.webkitRelativePath || f.name}));
+async function walk(entry, prefix=''){
+  if (entry.isFile) return new Promise(r => entry.file(f => r([{file:f, path: prefix + f.name}]), () => r([])));
+  if (!entry.isDirectory) return [];
+  const reader = entry.createReader(), out = [];
+  for (;;){
+    const batch = await new Promise(r => reader.readEntries(r, () => r([])));
+    if (!batch.length) break;
+    for (const e of batch){ if (e.isDirectory && IGNORE.has(e.name)) continue; out.push(...await walk(e, prefix + entry.name + '/')); }
+  }
+  return out;
+}
+
+$('#openDir').onclick = () => $('#dirIn').click();
+$('#openFiles').onclick = () => $('#fileIn').click();
+$('#dirIn').onchange = e => { analyze(fromInput(e.target.files)); e.target.value=''; };
+$('#fileIn').onchange = e => { analyze(fromInput(e.target.files)); e.target.value=''; };
+$('#clear').onclick = clearAll;
+function clearAll(){ rows = []; skipped = 0; elapsed = 0; render(); }
+
+document.querySelectorAll('#views button').forEach(b => b.onclick = () => {
+  view = b.dataset.view; sort = {key:'total', dir:-1}; render();
+});
+$('#tbl thead').addEventListener('click', e => { const th = e.target.closest('th'); if (th) setSort(th.dataset.k); });
+$('#tbl thead').addEventListener('keydown', e => { if (e.key === 'Enter'){ const th = e.target.closest('th'); if (th) setSort(th.dataset.k); } });
+
+document.addEventListener('keydown', e => {
+  if (e.ctrlKey && e.key.toLowerCase() === 'q'){ e.preventDefault(); clearAll(); return; }
+  if (/^[1-6]$/.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) setSort(COLS[view][+e.key - 1][0]);
+});
+
+const drop = $('#drop');
+['dragenter','dragover'].forEach(n => drop.addEventListener(n, e => { e.preventDefault(); drop.classList.add('drag'); }));
+['dragleave','drop'].forEach(n => drop.addEventListener(n, e => { e.preventDefault(); drop.classList.remove('drag'); }));
+drop.addEventListener('drop', async e => {
+  const items = [...e.dataTransfer.items].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+  const list = [];
+  for (const en of items) list.push(...await walk(en));
+  analyze(list);
+});
+
+render();
+</script>
+</body>
+</html>
